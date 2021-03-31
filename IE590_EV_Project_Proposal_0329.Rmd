@@ -1,0 +1,463 @@
+---
+title: "IE590_Project_Proposal"
+author: "Lakshman , Utkuhan, Suraj, Kendrick" 
+date: "3/26/2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r saving Rdata}
+save(list=ls(all=T),file='IE590_LR_ProjectProposal_0326.RData')
+```
+
+```{r message=FALSE}
+#this code block is to load required libraries
+#install.packages("readxl")
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(corrplot)
+library(car)
+library(glmnet)
+library(MASS)
+library(ISLR)
+library(gam)
+library(splines)
+```
+
+## Exploratory Data Analysis
+```{r importing data}
+evdata = read_excel("EVDataFile2011-2019.xlsx")
+evdata = as.data.frame(evdata)
+attach(evdata)
+```
+The data contains 450 observations of 34 variables
+
+```{r basic view}
+colnames(evdata)[28] = "LAND_AREA"
+head(evdata)
+str(evdata)
+summary(evdata)
+
+```
+Findings:
+All of the columns, except for State, appear to be numeric or qualitative.
+POP, LandArea,POPDENS are all interrelated so there would be a lot of correlation
+DETOUSE, DETHOUSE%, OOH, OOH% are also very correlated
+VEHMFG state manufacturing in millions of dollars
+
+```{r checking if there are any NAs or missing values in the data}
+#checking for NAs 
+
+for (i in 1: ncol(evdata)){
+  if (sum(complete.cases(evdata[,i])) != nrow(evdata)){
+    print(paste("The column number" , i, "has NA values."))
+    print(paste("The name of the column is", colnames(evdata)[i]  ))
+    print(paste("Number of NA values: ", nrow(evdata) - sum(complete.cases(evdata[,i])) ))
+    #evdata = evdata[-which(complete.cases(evdata[,i]) == FALSE),]
+  }
+  
+}
+
+#removing the values that have NA in them for WIND
+evdata = evdata[which(complete.cases(evdata$WIND) == TRUE),]
+
+#removing the values that have NA in them for CO2 and GAS
+evdata = evdata[which(complete.cases(evdata$GAS) == TRUE),]
+evdata = evdata[which(complete.cases(evdata$CO2) == TRUE),]
+
+```
+We already know the information for columns CO2 emissions and annual gas prices are not available for
+the month of 2019. This corresponds to 50 of the rows or values.
+
+What are the different kinds of plots that can be drawn?
+Response vs all of the predictors
+Spread of all of the predictors
+Pair wise
+Correlation check
+
+sales per year
+sales per state
+sales per number of stations per year
+sales vs other predictors / wrapped per year
+
+```{r response plot}
+x = evdata$SALES
+x[which(x == 0)] = 1E-9
+
+par(mfrow = c(1,2))
+hist(x, breaks = 100, main = 'Histogram of Sales', xlab = 'Sales')
+h = hist(log(x), breaks = 100, main = 'Histogram of log Sales', xlab = 'log Sales')
+xfit <- seq(min(log(x)), max(log(x)), length = 1000)
+yfit = pnorm(xfit, mean = mean(x), sd = sd(x))
+yfit = yfit*diff(h$mids[1:2])*length(x)
+lines(xfit, yfit)
+
+par(mfrow = c(1,2))
+plot(density(x), main = 'Density plot of Sales')
+plot(density(log(x)), main = 'Density plot of log Sales')
+```
+
+Converted "0" values for Sales to 1e-9 in case log transformation is needed for the model. 
+
+```{r checking for individual graps}
+#pairs(SALES~.- State, data = evdata)
+
+sales_year = evdata %>% group_by(YEAR) %>% summarise(sales = sum(SALES))
+
+ggplot(data = sales_year, mapping = aes(x = YEAR, y = sales))+
+  geom_line()+
+  geom_text(aes(label = sales), nudge_y = 7000) +
+  labs(x = 'Year', y = 'Sales of EVs', title = 'Sales of EVs vs Year')
+
+sales_state = evdata %>% group_by(STATE) %>% summarise(sales = sum(SALES))
+ggplot(data= sales_state, mapping = aes(x = reorder(STATE, -sales), y = sales)) +
+  geom_col()+
+  labs(x = 'State', y = 'Sales of EVs', title = 'Sales of EVs by State')+
+  theme(axis.text.x = element_text(angle = 90))
+
+  
+
+```
+
+
+Findings:
+as can be seen in the statewise sales data CA dwarfs every other state
+in its EV sales over the years from 2011 to 2018
+
+
+This section is to generate plots for response (SALES) with each of the predictors
+excluding State
+```{r plotting response with each of the predictors}
+#writing loops to plot sales vs each of the predictor variables
+#32 plots except for State and SALES. Splitting this as plots of 4
+
+
+# ggplot(data = evdata, mapping = aes_string(y = 'SALES', x = colnames(evdata)[i]))+
+#       geom_point() +
+#       labs(x = colnames(evdata)[i], y = 'Sales of EVs', title = paste('Sales of EVs vs', colnames(evdata)[i])  )
+# 
+ev_plot = evdata[,c(-1,-3)]
+
+for(j in seq(1,32, 4)){
+  par(mfrow = c(2,2))
+  for (i in seq(j, min(j+3, ncol(ev_plot))  )  ){
+    if(colnames(ev_plot)[i] == 'SALES') {
+      next
+      }
+    else{
+      plot(ev_plot[, colnames(ev_plot)[i]], ev_plot$SALES, 
+           main = paste('EV Sales vs', colnames(ev_plot)[i]), xlab =
+             colnames(ev_plot)[i], ylab = 'Sales')
+      }
+    }
+  }
+  
+```
+
+
+
+```{r plotting pairs, echo = FALSE}
+
+#plotting pairs as too many variables to be of any use
+
+
+#ev_pairs = evdata[, which(colnames(evdata) != 'State')]
+#par(mfrow = c(1,1))
+#par(mar = c(0.1,0.1,0.1,0.1))
+#pairs(SALES~., data = ev_pairs[,1:10])
+
+
+
+```
+
+
+```{r checking for cor}
+
+ev_wo_sales = ev_plot[, which(colnames(ev_plot) != 'SALES')]
+ev_cor = cor(ev_wo_sales) 
+#ev_cor[lower.tri(ev_cor, diag = TRUE)] = NA
+corrplot(ev_cor, method = 'circle', type = 'upper',
+         tl.srt = 65, tl.cex = 0.7, 
+         title = 'Cor Plot Showing All Predictor Correlations', 
+         mar = c(0,0,2,0))
+
+#writing a function to perform hypothesis testing on correlation
+#using the cor.test function
+cor_pval = cor.mtest(ev_cor)$p
+colnames(cor_pval)<- rownames(cor_pval)<- colnames(ev_wo_sales)
+
+#this displays the colors of significant correlation
+corrplot(ev_cor, type = 'upper',
+         tl.srt = 65, tl.cex = 0.7, p.mat = cor_pval, sig.level = 0.01, diag = FALSE,
+         insig = 'blank', 
+         title = 'Cor Plot Showing Sig Correlations With alpha = 0.01', 
+         mar = c(0,0,2,0))
+
+
+#ev_cor_high = sapply(ev_cor, function(x) ifelse (abs(x) >= 0.75, x, "NA"))
+ev_cor_high = ev_cor
+#ev_cor_high = ev_cor_high[ev_cor_high > 0.75]
+ev_cor_high[abs(ev_cor_high) < 0.75] = NA
+ev_cor_high = as.matrix(ev_cor_high)
+
+corrplot(ev_cor_high, type = 'upper',
+         tl.srt = 65, tl.cex = 0.7, diag = FALSE, na.label = "  ", 
+         title = 'Cor Plot Showing Correlations >= 0.75', 
+         mar = c(0,0,2,0))
+
+
+#displaying correlations of those with significant correlation
+#indices gives data frame or pair of predictors that have >0.75 correlation
+indices = which(cor_pval < 0.05, arr.ind = TRUE)
+indices = as.data.frame(indices)
+indices$cor = numeric(length = dim(indices)[1])
+
+for (i in 1:dim(indices)[1]){
+  indices$cor[i] = ev_cor[as.numeric(indices[i,'row']), as.numeric(indices[i,'col'])]
+}
+#indices$cor = ev_cor[as.numeric(indices[,'row']), as.numeric(indices[,'col'])]
+
+indices[, 'row'] = rownames(cor_pval)[as.numeric(indices[, 'row'])]
+indices[, 'col'] = colnames(cor_pval)[as.numeric(indices[, 'col'])]
+
+len = nrow(indices)
+indices$rep = 'first'
+
+for (i in seq(1:nrow(indices))){
+  if (indices[i,'row'] == indices[i, 'col']){
+    indices$rep[i] = 'duplicate'
+  }
+}
+
+for (i in seq(1,(len - 1)) ){
+  for (j in seq((i+1),len)){
+    if( (indices[i, 'row'] == indices[j, 'col']) & (indices[i, 'col'] == indices[j, 'row'])){
+      indices$rep[i] = 'duplicate'
+    }
+  }
+}
+
+#cleaning it up to remove extra columns, SALES, and cor with values less than 0.75
+indices = indices[which(indices$rep != 'duplicate'),]
+indices = indices[which(indices$cor >= 0.75), ]
+indices = indices[which(indices$row != 'SALES'), ]
+indices = indices[, which(colnames(indices) != 'rep')]
+indices
+```
+indices gives list of all pairs where the correlation is high
+corr plot shows the significant correlations, taken for alpha = 0.01
+
+## Linear Models
+```{r full linear model}
+set.seed(1)
+evdata$SALES[which(evdata$SALES == 0)] = 1E-9
+sample_rows <- sample(length(evdata[,1]),size = .8*length(evdata[,1]),replace = F)
+
+
+
+evdata.train <- evdata[sample_rows,]
+evdata.test <- evdata[-sample_rows,]
+
+#Model 1
+full_lin_model <- lm(SALES~.-STATE-YEAR, data = evdata.train)
+summary(full_lin_model)
+
+
+full_lin_model.test <- predict(full_lin_model,evdata.test)
+print(paste("Full Linear Model MSE:" , round(mean((evdata.test$SALES - full_lin_model.test)^2),2)))
+
+vif(full_lin_model)
+
+#Stepwise Function
+red_lin_model <- step(full_lin_model, direction = "both", trace = 0)
+summary(red_lin_model)
+
+red_lin_model.test <- predict(red_lin_model,evdata.test)
+print(paste("Reduced Linear Model MSE:", round(mean((evdata.test$SALES - red_lin_model.test)^2),2)))
+
+
+res <- rstandard(red_lin_model)
+par(mfrow = c(2,3))
+
+#histogram of residuals
+hist(res, prob = 'T', col = 'gray', main = 'Histogram of Residuals', 
+     xlab = 'Residuals')
+lines(density(res), col = 'red', lwd = 3)
+
+#norm prob plot of residuals 
+qqnorm(res,ylab = 'Residuals', main = 'Normal Probability Plot', pch = 19, 
+       col = 'blue', xlab = 'Theoretical Quantiles')
+qqline(res)
+
+#residuals vs order plot
+plot(res , xlab = 'Observation Order', ylab = 'Residuals', pch = 19, 
+     col  ='blue', main = 'Residuals vs Order')
+abline(0,0,lwd=3, col = 'red')
+
+#Residuals vs Fitted plot
+plot(res~predict(red_lin_model), pch = 19, col = 'blue', main = 'Residuals vs Fitted', 
+     ylab = 'Residuals', xlab = 'Fitted Values')
+abline(0,0, lwd= 3 , col = 'red')
+
+#Observed vs fitted plot
+plot(predict(red_lin_model),evdata.train$SALES, pch = 19, col = 'blue', 
+     main = 'Observed vs Fitted', ylab = 'Observed Values', 
+     xlab = 'Fitted Values')
+abline(0,1,lwd=3,col ='red')
+
+
+
+bc <- boxcox(red_lin_model)
+
+```
+
+[1] "Full Linear Model MSE: 1894500.64"
+
+[1] "Reduced Linear Model MSE: 1918229.66"
+
+```{r transformed linear model}
+#Transformed Linear Model 
+lambda <- bc$x[which.max(bc$y)]
+
+trans_full_lin_model <- lm(((SALES^lambda-1)/lambda)~.-STATE-YEAR, data = evdata.train)
+summary(trans_full_lin_model)
+trans_full_lin_model.test <- predict(trans_full_lin_model,evdata.test)
+
+print(paste("Full Transformed Linear Model MSE:" , round(mean((evdata.test$SALES - trans_full_lin_model.test)^2),2)))
+
+#Reduced Transformed Linear Model
+trans_red_lin_model <- step(trans_full_lin_model, direction = "both", trace = 0)
+summary(trans_red_lin_model)
+trans_red_lin_model.test <- predict(trans_red_lin_model,evdata.test)
+
+print(paste("Reduced Transformed Linear Model MSE:", round(mean((evdata.test$SALES - trans_red_lin_model.test)^2),2)))
+
+res_trans <- rstandard(trans_red_lin_model)
+par(mfrow = c(2,3))
+#histogram of residuals
+hist(res_trans, prob = 'T', col = 'gray', main = 'Histogram of Residuals', 
+     xlab = 'Residuals')
+lines(density(res_trans), col = 'red', lwd = 3)
+
+#norm prob plot of residuals 
+qqnorm(res_trans,ylab = 'Residuals', main = 'Normal Probability Plot', pch = 19, 
+       col = 'blue', xlab = 'Theoretical Quantiles')
+qqline(res)
+
+#residuals vs order plot
+plot(res_trans , xlab = 'Observation Order', ylab = 'Residuals', pch = 19, 
+     col  ='blue', main = 'Residuals vs Order')
+abline(0,0,lwd=3, col = 'red')
+
+#Residuals vs Fitted plot
+plot(res_trans~predict(trans_red_lin_model), pch = 19, col = 'blue', main = 'Residuals vs Fitted', 
+     ylab = 'Residuals', xlab = 'Fitted Values')
+abline(0,0, lwd= 3 , col = 'red')
+
+#Observed vs fitted plot
+plot(predict(trans_red_lin_model),evdata.train$SALES, pch = 19, col = 'blue', 
+     main = 'Observed vs Fitted', ylab = 'Observed Values', 
+     xlab = 'Fitted Values')
+abline(0,1,lwd=3,col ='red')
+
+```
+
+We used boxcox method to transform our response variable. It seems to fix the normality problem. 
+
+[1] "Full Transformed Linear Model MSE: 14495637.34"
+
+[1] "Reduced Transformed Linear Model MSE: 14495640.7"
+
+## Ridge and Lasso Regression
+```{r ridge and lasso }
+x <- as.matrix(evdata.train[,-1:-3])
+y <- as.matrix(evdata.train$SALES)
+
+#Ridge Regression
+ridge_model <- glmnet(x,y = y,family = "gaussian", alpha = 0)
+ridge_model.test <- predict(ridge_model,x,s = 1)
+print(paste("Ridge Regression MSE:" ,round(mean((evdata.train$SALES - ridge_model.test)^2),2)))
+
+cv.out.r<-cv.glmnet(x,y,alpha=0)
+plot(cv.out.r)
+
+ridge_model_cv.test <- predict(ridge_model,x,s = cv.out.r$lambda.mi)
+print(paste("Ridge Regression(CV) MSE:" ,round(mean((evdata.train$SALES - ridge_model_cv.test)^2),2)))
+
+#Lasso Regression
+lasso_model <- glmnet(x,y = y,family = "gaussian", alpha = 1)
+lasso_model.test <- predict(lasso_model,x,s = 1)
+print(paste("Lasso Regression MSE:" ,round(mean((evdata.train$SALES - lasso_model.test)^2),2)))
+
+cv.out.l<-cv.glmnet(x,y,alpha=1)
+plot(cv.out.l)
+
+lasso_model_cv.test <- predict(ridge_model,x,s = cv.out.l$lambda.mi)
+print(paste("Lasso Regression(CV) MSE:" ,round(mean((evdata.train$SALES - lasso_model_cv.test)^2),2)))
+```
+
+## Generalized Additive Models
+```{r Fitting a GAM model excluding State & Year}
+gam.1 <- gam(SALES~-STATE-YEAR,data = evdata.train)
+gam.1.test <- predict(gam.1,evdata.test)
+print(paste("simple GAM MSE:", round(mean((evdata.test$SALES - gam.1.test)^2),2)))
+```
+
+
+```{r GAM using all variables}
+gam.full <- gam(SALES~-STATE-YEAR,  data = evdata.train)
+gam.full.test <- predict(gam.full,evdata.test)
+print(paste("full GAM MSE:", round(mean((evdata.test$SALES - gam.full.test)^2),2)))
+
+scope_list = list(
+  "SOLAR" = ~1 + SOLAR + s(SOLAR, df=2) + s(SOLAR, df=3) + s(SOLAR, df =4) +        s(SOLAR, df=5),
+  "EDU"= ~1+ EDU+ s(EDU, df=2)+s(EDU, df=3)+s(EDU, df =4)+s(EDU, df=5),
+"MEDINC"= ~1+ MEDINC+ s(MEDINC, df=2)+s(MEDINC, df=3)+s(MEDINC, df =4)+s(MEDINC, df=5),
+"TIME"= ~1+ TIME+ s(TIME, df=2)+s(TIME, df=3)+s(TIME, df =4)+s(TIME, df=5),
+"EMPLOY"= ~1+ EMPLOY+ s(EMPLOY, df=2)+s(EMPLOY, df=3)+s(EMPLOY, df =4)+s(EMPLOY, df=5),
+"PRIVEH"= ~1+ PRIVEH+ s(PRIVEH, df=2)+s(PRIVEH, df=3)+s(PRIVEH, df =4)+s(PRIVEH, df=5),
+"ELEC"= ~1+ ELEC+ s(ELEC, df=2)+s(ELEC, df=3)+s(ELEC, df =4)+s(ELEC, df=5),
+"POP"= ~1+ POP+ s(POP, df=2)+s(POP, df=3)+s(POP, df =4)+s(POP, df=5),
+"POVERTY"= ~1+ POVERTY+ s(POVERTY, df=2)+s(POVERTY, df=3)+s(POVERTY, df =4)+s(POVERTY, df=5),
+"EVMOD"= ~1+ EVMOD+ s(EVMOD, df=2)+s(EVMOD, df=3)+s(EVMOD, df =4)+s(EVMOD, df=5),
+"RANGE"= ~1+ RANGE+ s(RANGE, df=2)+s(RANGE, df=3)+s(RANGE, df =4)+s(RANGE, df=5),
+"ZEM"= ~1+ ZEM+ s(ZEM, df=2)+s(ZEM, df=3)+s(ZEM, df =4)+s(ZEM, df=5),
+"POPDENS"= ~1+ POPDENS+ s(POPDENS, df=2)+s(POPDENS, df=3)+s(POPDENS, df =4)+s(POPDENS, df=5),
+"`DETACH%`"= ~1+ `DETACH%`+ s(`DETACH%`, df=2)+s(`DETACH%`, df=3)+s(`DETACH%`, df =4)+s(`DETACH%`, df=5),
+"VMT"= ~1+ VMT+ s(VMT, df=2)+s(VMT, df=3)+s(VMT, df =4)+s(VMT, df=5),
+"VEHMFG"= ~1+ VEHMFG+ s(VEHMFG, df=2)+s(VEHMFG, df=3)+s(VEHMFG, df =4)+s(VEHMFG, df=5),
+  "WIND" = ~1 + WIND + s(WIND, df=2) + s(WIND, df=3) + s(WIND, df =4) + s(WIND,    df=5),
+  "SGDP" = ~1 + SGDP + s(SGDP, df=2) + s(SGDP, df=3) + s(SGDP, df =4) + s(SGDP,    df=5),
+  "CO2" = ~1 + CO2 + s(CO2, df=2) + s(CO2, df=3) + s(CO2, df =4) + s(CO2,          df=5),
+  "PUBTR" = ~1 + PUBTR + s(PUBTR, df=2) + s(PUBTR, df=3) + s(PUBTR, df =4) +       s(PUBTR,df=5),
+"TOTVEH" = ~1 + TOTVEH + s(TOTVEH, df=2) + s(TOTVEH, df=3) + s(TOTVEH, df =4) + s(TOTVEH,df=5),
+"GAS" = ~1 + GAS + s(GAS, df=2) + s(GAS, df=3) + s(GAS, df =4) + s(GAS,df=5),
+"PORTS" = ~1 + PORTS + s(PORTS, df=2) + s(PORTS, df=3) + s(PORTS, df =4) + s(PORTS,df=5),
+  "STATIONS" = ~1 + STATIONS + s(STATIONS, df=2) + s(STATIONS, df=3) +             s(STATIONS, df =4) + s(STATIONS,df=5),
+  "INCENT" = ~1 + INCENT + s(INCENT, df=2) + s(INCENT, df=3) +             s(INCENT, df =4) + s(INCENT,df=5),
+  "OOH" = ~1 + OOH + s(OOH, df=2) + s(OOH, df=3) + s(OOH, df =4) + s(OOH,df=5),
+  "DETACH" = ~1 + DETACH + s(DETACH, df=2) + s(DETACH, df=3) +             s(DETACH, df =4) + s(DETACH,df=5),
+  "CHARGE" = ~1 + CHARGE + s(CHARGE, df=2) + s(CHARGE, df=3) +             s(CHARGE, df =4) + s(CHARGE,df=5), 
+"LAND_AREA" = ~1 + LAND_AREA + s(LAND_AREA, df=2) + s(LAND_AREA, df=3) +             s(LAND_AREA, df =4) + s(LAND_AREA,df=5),
+"`OOH%`" = ~1 + `OOH%` + s(`OOH%`, df=2) + s(`OOH%`, df=3) +             s(`OOH%`, df =4) + s(`OOH%`,df=5),
+"PRICE" = ~1 + PRICE + s(PRICE, df=2) + s(PRICE, df=3) + s(PRICE, df =4) + s(PRICE,df=5)
+)
+
+gam_red <- step.Gam(gam.full,scope_list)
+
+gam_final <- gam(SALES ~ s(SOLAR, df = 4) + EDU + s(TIME, df = 5) + s(ELEC, df = 5) +      EVMOD + s(`DETACH%`, df = 4) + SGDP + s(CO2, df = 2) + s(PORTS,      df = 5) + STATIONS + INCENT + s(`OOH%`, df = 5) + PRICE, data = evdata.train)
+anova(gam.full,gam_final)
+
+par(mfrow=c(1,10))
+plot(gam_final, se=T)
+
+gam_model.test <- predict(gam_final,evdata.test)
+
+print(paste("full GAM MSE:", round(mean((evdata.test$SALES - gam.full.test)^2),2)))
+print(paste("Reduced GAM MSE:", round(mean((evdata.test$SALES - gam_model.test)^2),2)))
+
+```
+
